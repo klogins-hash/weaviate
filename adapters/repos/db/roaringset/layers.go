@@ -94,7 +94,11 @@ func (bml BitmapLayers) Flatten(clone bool) *sroar.Bitmap {
 
 	for i := 1; i < len(bml); i++ {
 		merged.AndNot(bml[i].Deletions)
-		merged.Or(bml[i].Additions)
+		if clone || merged.CompareNumKeys(bml[i].Additions) != -1 {
+			merged.Or(bml[i].Additions)
+		} else {
+			merged = bml[i].Additions.Or(merged)
+		}
 	}
 
 	return merged
