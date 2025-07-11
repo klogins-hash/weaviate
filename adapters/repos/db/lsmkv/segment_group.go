@@ -671,11 +671,11 @@ func (sg *SegmentGroup) roaringSetGet(key []byte) (out roaringset.BitmapLayers, 
 	release = noopRelease
 	// use bigger buffer for first layer, to make space for further merges
 	// with following layers
-	bitmapBufPool := roaringset.NewBitmapBufPoolFactorWrapper(sg.bitmapBufPool, 1.5)
+	// bitmapBufPool := roaringset.NewBitmapBufPoolFactorWrapper(sg.bitmapBufPool, 1.5)
 
 	i := 0
 	for ; i < ln; i++ {
-		layer, layerRelease, err := segments[i].roaringSetGet(key, bitmapBufPool)
+		layer, layerRelease, err := segments[i].roaringSetGet(key, sg.bitmapBufPool)
 		if err == nil {
 			out = append(out, layer)
 			release = layerRelease
