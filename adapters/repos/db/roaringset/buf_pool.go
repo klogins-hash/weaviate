@@ -36,7 +36,7 @@ func cloneToBuf(pool BitmapBufPool, bm *sroar.Bitmap) (cloned *sroar.Bitmap, put
 
 func NewBitmapBufPoolDefault(logger logrus.FieldLogger, inMemoMaxBufSize int, maxMemoSizeForBufs int,
 ) (pool BitmapBufPool, close func()) {
-	cleanupInterval := 10 * time.Second
+	// cleanupInterval := 10 * time.Second
 
 	syncMinRangeP2 := 9  // 2^9 = 512B
 	syncMaxRangeP2 := 20 // 2^20 = 1MB
@@ -53,9 +53,10 @@ func NewBitmapBufPoolDefault(logger logrus.FieldLogger, inMemoMaxBufSize int, ma
 	}
 
 	p := NewBitmapBufPoolRanged(syncMaxBufSize, inMemoBufsLimits, allRanges...)
-	stop := p.StartPeriodicCleanup(logger, cleanupInterval)
+	// stop := p.StartPeriodicCleanup(logger, cleanupInterval)
 
-	return p, stop
+	// return p, stop
+	return p, func() {}
 }
 
 // -----------------------------------------------------------------------------
