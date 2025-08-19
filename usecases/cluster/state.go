@@ -200,8 +200,12 @@ func (s *State) Hostnames() []string {
 	return out[:i]
 }
 
-func (s *State) Leave(timeout time.Duration) error {
-	return s.list.Leave(timeout)
+func (s *State) Shutdown(timeout time.Duration) error {
+	if err := s.list.Leave(timeout); err != nil {
+		return err
+	}
+
+	return s.list.Shutdown()
 }
 
 func nodeMetadata(m *memberlist.Node) (NodeMetadata, error) {
