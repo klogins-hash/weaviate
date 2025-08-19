@@ -45,6 +45,10 @@ type NodeSelector interface {
 	// NodeHostname return hosts address for a specific node name
 	NodeHostname(name string) (string, bool)
 	AllHostnames() []string
+	// Leave leaves the cluster gracefully
+	Leave(timeout time.Duration) error
+	// Shutdown leaves the cluster gracefully and shuts down the memberlist instance
+	Shutdown() error
 }
 
 type State struct {
@@ -200,11 +204,11 @@ func (s *State) Hostnames() []string {
 	return out[:i]
 }
 
-func (s *State) Shutdown(timeout time.Duration) error {
-	if err := s.list.Leave(timeout); err != nil {
-		return err
-	}
+func (s *State) Leave(timeout time.Duration) error {
+	return s.list.Leave(timeout)
+}
 
+func (s *State) Shutdown() error {
 	return s.list.Shutdown()
 }
 
