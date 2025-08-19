@@ -980,6 +980,13 @@ func configureAPI(api *operations.WeaviateAPI) http.Handler {
 				Errorf("failed to gracefully shutdown")
 		}
 
+		if err := appState.Cluster.Leave(60 * time.Second); err != nil {
+			appState.Logger.
+				WithError(err).
+				WithField("action", "leave").
+				Errorf("failed to gracefully leave memberlist")
+		}
+
 		if err := appState.ClusterService.Close(ctx); err != nil {
 			appState.Logger.
 				WithError(err).

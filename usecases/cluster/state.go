@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/memberlist"
 	"github.com/pkg/errors"
@@ -197,6 +198,10 @@ func (s *State) Hostnames() []string {
 	}
 
 	return out[:i]
+}
+
+func (s *State) Leave(timeout time.Duration) error {
+	return s.list.Leave(timeout)
 }
 
 func nodeMetadata(m *memberlist.Node) (NodeMetadata, error) {
