@@ -15,6 +15,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"github.com/sirupsen/logrus"
 
 	cmd "github.com/weaviate/weaviate/cluster/proto/api"
@@ -58,16 +59,6 @@ func (s *Raft) Open(ctx context.Context, db schema.Indexer) error {
 func (s *Raft) Close(ctx context.Context) (err error) {
 	s.log.Info("shutting down raft sub-system ...")
 
-	// non-voter can be safely removed, as they don't partake in RAFT elections
-	if !s.store.IsVoter() {
-		s.log.Info("removing this node from cluster prior to shutdown ...")
-		if err := s.Remove(ctx, s.store.ID()); err != nil {
-			s.log.WithError(err).Error("remove this node from cluster")
-		} else {
-			s.log.Info("successfully removed this node from the cluster.")
-		}
-	}
-
 	// transfer leadership: it stops accepting client requests, ensures
 	// the target server is up to date and initiates the transfer
 	if s.store.IsLeader() {
@@ -94,14 +85,22 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
+	// Remove from Raft configuration after leadership transfer (for all nodes)
+	s.log.Info("removing this node from Raft configuration...")
+	if err := s.store.raft.RemoveServer(raft.ServerID(s.store.ID()), 0, 0).Error(); err != nil {
+		s.log.WithError(err).Warn("remove from Raft configuration")
+	} else {
+		s.log.Info("successfully removed from Raft configuration")
+	}
+
 	s.log.Info("leaving memberlist ...")
 	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("leave memberlist")
 	}
 
 	// Wait a bit for gossip to propagate before closing transport
-	s.log.Info("waiting for gossip propagation...")
-	time.Sleep(3 * time.Second)
+	s.log.Info("waiting for gossip propagation and drain mode...")
+	time.Sleep(5 * time.Second)
 
 	// Close transport after gossip propagation to prevent Raft traffic
 	s.store.log.Info("closing raft-net after gossip propagation...")
