@@ -99,8 +99,12 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.store.log.WithError(err).Warn("leave memberlist")
 	}
 
-	// Close transport immediately after leave to prevent Raft traffic
-	s.store.log.Info("closing raft-net immediately after memberlist leave...")
+	// Wait a bit for gossip to propagate before closing transport
+	s.log.Info("waiting for gossip propagation...")
+	time.Sleep(3 * time.Second)
+
+	// Close transport after gossip propagation to prevent Raft traffic
+	s.store.log.Info("closing raft-net after gossip propagation...")
 	if err := s.store.raftTransport.Close(); err != nil {
 		s.store.log.WithError(err).Warn("close raft-net")
 	}
