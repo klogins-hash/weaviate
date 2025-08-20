@@ -94,6 +94,12 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
+	// Close transport IMMEDIATELY after leadership transfer to prevent Raft traffic
+	s.store.log.Info("closing raft-net immediately to prevent peer operations...")
+	if err := s.store.raftTransport.Close(); err != nil {
+		s.store.log.WithError(err).Warn("close raft-net")
+	}
+
 	s.log.Info("leaving memberlist ...")
 	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("leave memberlist")
@@ -108,11 +114,7 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
 	}
 
-	// Close transport immediately after leadership transfer to break peer connections
-	s.store.log.Info("closing raft-net ...")
-	if err := s.store.raftTransport.Close(); err != nil {
-		s.store.log.WithError(err).Warn("close raft-net")
-	}
+	// Transport already closed after leadership transfer
 
 	s.log.Info("stopping raft operations ...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
