@@ -13,6 +13,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -87,14 +88,21 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 
 	// Remove from Raft configuration after leadership transfer (for all nodes)
 	s.log.Info("removing this node from Raft configuration...")
-	if err := s.store.raft.RemoveServer(raft.ServerID(s.store.ID()), 0, 0).Error(); err != nil {
+	removeServerFuture := s.store.raft.RemoveServer(raft.ServerID(s.store.ID()), 0, 0)
+	if err := removeServerFuture.Error(); err != nil {
 		s.log.WithError(err).Warn("remove from Raft configuration")
 	} else {
-		s.log.Info("successfully removed from Raft configuration")
-	}
+		s.log.Info("successfully submitted remove server request")
 
-	// wait for the configuration change to be applied
-	time.Sleep(3 * time.Second)
+		// Wait for the configuration change to be committed and applied
+		// This prevents "unable to get address for server" warnings
+		s.log.Info("waiting for Raft configuration removal to be committed...")
+		if err := s.waitForServerRemoval(ctx); err != nil {
+			s.log.WithError(err).Warn("timeout waiting for server removal, proceeding anyway")
+		} else {
+			s.log.Info("confirmed: node removed from Raft configuration")
+		}
+	}
 
 	s.log.Info("leaving memberlist ...")
 	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
@@ -122,6 +130,41 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 	}
 
 	return s.store.Close(ctx)
+}
+
+func (s *Raft) waitForServerRemoval(ctx context.Context) error {
+	timeout := 10 * time.Second
+	deadline := time.Now().Add(timeout)
+	nodeID := raft.ServerID(s.store.ID())
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			configFuture := s.store.raft.GetConfiguration()
+			if err := configFuture.Error(); err != nil {
+				return fmt.Errorf("failed to get Raft configuration: %w", err)
+			}
+
+			config := configFuture.Configuration()
+			found := false
+			for _, server := range config.Servers {
+				if server.ID == nodeID {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return nil
+			}
+
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for server removal after %v", timeout)
 }
 
 func (s *Raft) Ready() bool {
