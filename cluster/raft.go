@@ -59,6 +59,8 @@ func (s *Raft) Open(ctx context.Context, db schema.Indexer) error {
 
 func (s *Raft) Close(ctx context.Context) (err error) {
 	s.log.Info("shutting down raft sub-system ...")
+	// IMMEDIATELY mark store as closed to reject any new operations
+	s.store.open.Store(false)
 
 	// non-voter can be safely removed, as they don't partake in RAFT elections
 	if !s.store.IsVoter() {
@@ -96,30 +98,15 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
-	s.log.Info("leaving memberlist to signal departure to peers...")
-	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
-		s.store.log.WithError(err).Warn("leave memberlist")
-	}
-
-	s.log.Info("waiting for peers to stop sending Raft traffic...")
-	select {
-	case <-ctx.Done():
-		s.log.Warn("shutdown timeout during peer traffic wait")
-	case <-time.After(5 * time.Second): // give peers time to stop sending
-		s.log.Info("peer traffic wait completed")
-	}
-
+	// 3. NOW shutdown Raft to stop all consensus operations
 	s.log.Info("stopping Raft operations after peers stopped sending traffic...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
 		s.store.log.WithError(err).Warn("shutdown raft")
 	}
 
 	s.log.Info("waiting for Raft operations to complete...")
-	select {
-	case <-ctx.Done():
-		s.log.Warn("shutdown timeout during Raft operations wait")
-	case <-time.After(3 * time.Second):
-		s.log.Info("Raft operations wait completed")
+	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
+		s.store.log.WithError(err).Warn("leave memberlist")
 	}
 
 	s.log.Info("shutting down memberlist...")

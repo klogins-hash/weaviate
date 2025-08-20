@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -62,9 +61,6 @@ type Service struct {
 	closeBootstrapper       chan struct{}
 	closeOnFSMCaughtUp      chan struct{}
 	closeWaitForDB          chan struct{}
-
-	// shutdown state tracking
-	shutdown atomic.Bool
 }
 
 // New returns a Service configured with cfg. The service will initialize internals gRPC api & clients to other cluster
@@ -217,9 +213,6 @@ func (c *Service) Open(ctx context.Context, db schema.Indexer) error {
 // Close closes the raft service and frees all allocated ressources. Internal RAFT store will be closed and if
 // leadership is assumed it will be transferred to another node. gRPC server and clients will also be closed.
 func (c *Service) Close(ctx context.Context) error {
-	// Mark service as shutting down to prevent readiness probe from returning true
-	c.shutdown.Store(true)
-
 	enterrors.GoWrapper(func() {
 		c.closeBootstrapper <- struct{}{}
 		c.closeWaitForDB <- struct{}{}
@@ -249,9 +242,6 @@ func (c *Service) Close(ctx context.Context) error {
 
 // Ready returns or not whether the node is ready to accept requests.
 func (c *Service) Ready() bool {
-	if c.shutdown.Load() {
-		return false
-	}
 	return c.Raft.Ready()
 }
 

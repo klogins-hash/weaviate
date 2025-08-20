@@ -513,11 +513,9 @@ func (st *Store) StoreSchemaV1() error {
 }
 
 func (st *Store) Close(ctx context.Context) error {
-	if !st.open.Load() {
-		return nil
-	}
-
-	st.open.Store(false)
+	// if !st.open.Load() {
+	// 	return nil
+	// }
 
 	st.log.Info("closing log store ...")
 	if err := st.logStore.Close(); err != nil {
