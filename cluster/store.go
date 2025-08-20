@@ -200,7 +200,6 @@ type Store struct {
 	dbLoaded atomic.Bool
 
 	// raft implementation from external library
-	nodeSelector  cluster.NodeSelector
 	raft          *raft.Raft
 	raftResolver  types.RaftResolver
 	raftTransport *raft.NetworkTransport
@@ -331,8 +330,7 @@ func NewFSM(cfg Config, authZController authorization.Controller, snapshotter fs
 			Clock:            clockwork.NewRealClock(),
 			CompletedTaskTTL: cfg.DistributedTasks.CompletedTaskTTL,
 		}),
-		metrics:      newStoreMetrics(cfg.NodeID, reg),
-		nodeSelector: cfg.NodeSelector,
+		metrics: newStoreMetrics(cfg.NodeID, reg),
 	}
 }
 
@@ -519,37 +517,7 @@ func (st *Store) Close(ctx context.Context) error {
 		return nil
 	}
 
-	if err := st.nodeSelector.Leave(60 * time.Second); err != nil {
-		st.log.WithError(err).Warn("leave memberlist")
-	}
-
-	// transfer leadership: it stops accepting client requests, ensures
-	// the target server is up to date and initiates the transfer
-	if st.IsLeader() {
-		st.log.Info("transferring leadership to another server")
-		if err := st.raft.LeadershipTransfer().Error(); err != nil {
-			st.log.WithError(err).Error("transferring leadership")
-		} else {
-			st.log.Info("successfully transferred leadership to another server")
-		}
-	}
-
-	if err := st.raft.Shutdown().Error(); err != nil {
-		return err
-	}
-
 	st.open.Store(false)
-
-	if err := st.nodeSelector.Shutdown(); err != nil {
-		st.log.WithError(err).Warn("shutdown memberlist")
-	}
-
-	st.log.Info("closing raft-net ...")
-	if err := st.raftTransport.Close(); err != nil {
-		// it's not that fatal if we weren't able to close
-		// the transport, that's why just warn
-		st.log.WithError(err).Warn("close raft-net")
-	}
 
 	st.log.Info("closing log store ...")
 	if err := st.logStore.Close(); err != nil {

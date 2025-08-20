@@ -15,10 +15,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/weaviate/weaviate/cluster/replication"
-
 	"github.com/sirupsen/logrus"
+
 	cmd "github.com/weaviate/weaviate/cluster/proto/api"
+	"github.com/weaviate/weaviate/cluster/replication"
 	"github.com/weaviate/weaviate/cluster/schema"
 	"github.com/weaviate/weaviate/usecases/cluster"
 )
@@ -54,6 +54,9 @@ func (s *Raft) Open(ctx context.Context, db schema.Indexer) error {
 	return s.store.Open(ctx)
 }
 
+// Close() is called when the node is shutting down.
+// Order of operations:
+
 func (s *Raft) Close(ctx context.Context) (err error) {
 	s.log.Info("shutting down raft sub-system ...")
 
@@ -66,6 +69,71 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 			s.log.Info("successfully removed this node from the cluster.")
 		}
 	}
+
+	// transfer leadership: it stops accepting client requests, ensures
+	// the target server is up to date and initiates the transfer
+	if s.store.IsLeader() {
+		s.store.log.Info("transferring leadership to another server")
+		if err := s.store.raft.LeadershipTransfer().Error(); err != nil {
+			s.store.log.WithError(err).Error("transferring leadership")
+		} else {
+			s.log.Info("waiting for leadership transfer to complete...")
+			timeout := time.After(10 * time.Second)
+		transferLoop:
+			for s.store.IsLeader() {
+				select {
+				case <-timeout:
+					s.log.Warn("timeout waiting for leadership transfer")
+					break transferLoop
+				case <-ctx.Done():
+					s.log.Warn("shutdown timeout during leadership transfer")
+					break transferLoop
+				default:
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
+			s.store.log.Info("leadership transfer completed")
+		}
+	}
+
+	s.log.Info("leaving memberlist to signal departure to peers...")
+	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
+		s.store.log.WithError(err).Warn("leave memberlist")
+	}
+
+	s.log.Info("waiting for peers to stop sending Raft traffic...")
+	select {
+	case <-ctx.Done():
+		s.log.Warn("shutdown timeout during peer traffic wait")
+	case <-time.After(5 * time.Second): // give peers time to stop sending
+		s.log.Info("peer traffic wait completed")
+	}
+
+	s.log.Info("stopping Raft operations after peers stopped sending traffic...")
+	if err := s.store.raft.Shutdown().Error(); err != nil {
+		s.store.log.WithError(err).Warn("shutdown raft")
+	}
+
+	s.log.Info("waiting for Raft operations to complete...")
+	select {
+	case <-ctx.Done():
+		s.log.Warn("shutdown timeout during Raft operations wait")
+	case <-time.After(3 * time.Second):
+		s.log.Info("Raft operations wait completed")
+	}
+
+	s.log.Info("shutting down memberlist...")
+	if err := s.nodeSelector.Shutdown(); err != nil {
+		s.store.log.WithError(err).Warn("shutdown memberlist")
+	}
+
+	s.store.log.Info("closing raft-net ...")
+	if err := s.store.raftTransport.Close(); err != nil {
+		// it's not that fatal if we weren't able to close
+		// the transport, that's why just warn
+		s.store.log.WithError(err).Warn("close raft-net")
+	}
+
 	return s.store.Close(ctx)
 }
 

@@ -973,13 +973,6 @@ func configureAPI(api *operations.WeaviateAPI) http.Handler {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 
-		if err := appState.InternalServer.Close(ctx); err != nil {
-			appState.Logger.
-				WithError(err).
-				WithField("action", "shutdown").
-				Errorf("failed to gracefully shutdown")
-		}
-
 		// if err := appState.Cluster.Shutdown(60 * time.Second); err != nil {
 		// 	appState.Logger.
 		// 		WithError(err).
@@ -988,6 +981,13 @@ func configureAPI(api *operations.WeaviateAPI) http.Handler {
 		// }
 
 		if err := appState.ClusterService.Close(ctx); err != nil {
+			appState.Logger.
+				WithError(err).
+				WithField("action", "shutdown").
+				Errorf("failed to gracefully shutdown")
+		}
+
+		if err := appState.InternalServer.Close(ctx); err != nil {
 			appState.Logger.
 				WithError(err).
 				WithField("action", "shutdown").
