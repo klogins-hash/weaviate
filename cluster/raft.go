@@ -98,6 +98,12 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
+	// Signal departure to peers FIRST - before shutting down Raft
+	s.log.Info("leaving memberlist to signal departure to peers...")
+	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
+		s.store.log.WithError(err).Warn("leave memberlist")
+	}
+
 	// 3. NOW shutdown Raft to stop all consensus operations
 	s.log.Info("stopping Raft operations after peers stopped sending traffic...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
@@ -105,8 +111,11 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 	}
 
 	s.log.Info("waiting for Raft operations to complete...")
-	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
-		s.store.log.WithError(err).Warn("leave memberlist")
+	select {
+	case <-ctx.Done():
+		s.log.Warn("context cancelled during Raft operations wait")
+	case <-time.After(3 * time.Second):
+		s.log.Info("Raft operations wait completed")
 	}
 
 	s.log.Info("shutting down memberlist...")
