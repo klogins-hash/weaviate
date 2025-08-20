@@ -55,12 +55,8 @@ func (s *Raft) Open(ctx context.Context, db schema.Indexer) error {
 }
 
 // Close() is called when the node is shutting down.
-// Order of operations:
-
 func (s *Raft) Close(ctx context.Context) (err error) {
 	s.log.Info("shutting down raft sub-system ...")
-	// IMMEDIATELY mark store as closed to reject any new operations
-	s.store.open.Store(false)
 
 	// non-voter can be safely removed, as they don't partake in RAFT elections
 	if !s.store.IsVoter() {
@@ -94,40 +90,29 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 					time.Sleep(100 * time.Millisecond)
 				}
 			}
-			s.store.log.Info("leadership transfer completed")
+			s.store.log.Info("successfully transferred leadership to another server")
 		}
 	}
 
-	// Signal departure to peers FIRST - before shutting down Raft
-	s.log.Info("leaving memberlist to signal departure to peers...")
+	// Close transport immediately after leadership transfer to break peer connections
+	s.store.log.Info("closing raft-net ...")
+	if err := s.store.raftTransport.Close(); err != nil {
+		s.store.log.WithError(err).Warn("close raft-net")
+	}
+
+	s.log.Info("leaving memberlist ...")
 	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("leave memberlist")
 	}
 
-	// 3. NOW shutdown Raft to stop all consensus operations
-	s.log.Info("stopping Raft operations after peers stopped sending traffic...")
+	s.log.Info("stopping raft operations ...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
 		s.store.log.WithError(err).Warn("shutdown raft")
-	}
-
-	s.log.Info("waiting for Raft operations to complete...")
-	select {
-	case <-ctx.Done():
-		s.log.Warn("context cancelled during Raft operations wait")
-	case <-time.After(3 * time.Second):
-		s.log.Info("Raft operations wait completed")
 	}
 
 	s.log.Info("shutting down memberlist...")
 	if err := s.nodeSelector.Shutdown(); err != nil {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
-	}
-
-	s.store.log.Info("closing raft-net ...")
-	if err := s.store.raftTransport.Close(); err != nil {
-		// it's not that fatal if we weren't able to close
-		// the transport, that's why just warn
-		s.store.log.WithError(err).Warn("close raft-net")
 	}
 
 	return s.store.Close(ctx)
