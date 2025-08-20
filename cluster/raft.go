@@ -13,6 +13,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -85,7 +86,14 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 					time.Sleep(100 * time.Millisecond)
 				}
 			}
-			s.store.log.Info("successfully transferred leadership to another server")
+
+			// Verify that a new leader has been elected
+			s.log.Info("verifying new leader election...")
+			if err := s.waitForNewLeader(ctx); err != nil {
+				s.log.WithError(err).Warn("failed to verify new leader, proceeding anyway")
+			} else {
+				s.log.Info("confirmed: new leader has been elected")
+			}
 		}
 	}
 
@@ -126,6 +134,28 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 	}
 
 	return s.store.Close(ctx)
+}
+
+// waitForNewLeader waits for a new leader to be elected after leadership transfer
+func (s *Raft) waitForNewLeader(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for new leader: %w", ctx.Err())
+		case <-ticker.C:
+			newLeader := s.store.Leader()
+			if newLeader != "" && newLeader != s.store.ID() {
+				s.log.WithField("new_leader", newLeader).Info("new leader confirmed")
+				return nil
+			}
+		}
+	}
 }
 
 func (s *Raft) Ready() bool {
