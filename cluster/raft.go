@@ -93,6 +93,9 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.log.Info("successfully removed from Raft configuration")
 	}
 
+	// wait for the configuration change to be applied
+	time.Sleep(3 * time.Second)
+
 	s.log.Info("leaving memberlist ...")
 	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("leave memberlist")
@@ -100,7 +103,7 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 
 	// Wait a bit for gossip to propagate before closing transport
 	s.log.Info("waiting for gossip propagation and drain mode...")
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 
 	// Close transport after gossip propagation to prevent Raft traffic
 	s.store.log.Info("closing raft-net after gossip propagation...")
