@@ -98,6 +98,11 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("leave memberlist")
 	}
+
+	// Brief wait for gossip to propagate departure to peers
+	s.log.Info("waiting for gossip propagation...")
+	time.Sleep(2 * time.Second) // TODO: make this configurable or use another already configured
+
 	s.log.Info("shutting down memberlist...")
 	if err := s.nodeSelector.Shutdown(); err != nil {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
