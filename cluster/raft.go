@@ -94,25 +94,24 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
+	s.log.Info("leaving memberlist ...")
+	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
+		s.store.log.WithError(err).Warn("leave memberlist")
+	}
+	s.log.Info("shutting down memberlist...")
+	if err := s.nodeSelector.Shutdown(); err != nil {
+		s.store.log.WithError(err).Warn("shutdown memberlist")
+	}
+
 	// Close transport immediately after leadership transfer to break peer connections
 	s.store.log.Info("closing raft-net ...")
 	if err := s.store.raftTransport.Close(); err != nil {
 		s.store.log.WithError(err).Warn("close raft-net")
 	}
 
-	s.log.Info("leaving memberlist ...")
-	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
-		s.store.log.WithError(err).Warn("leave memberlist")
-	}
-
 	s.log.Info("stopping raft operations ...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
 		s.store.log.WithError(err).Warn("shutdown raft")
-	}
-
-	s.log.Info("shutting down memberlist...")
-	if err := s.nodeSelector.Shutdown(); err != nil {
-		s.store.log.WithError(err).Warn("shutdown memberlist")
 	}
 
 	return s.store.Close(ctx)
