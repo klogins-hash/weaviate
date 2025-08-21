@@ -513,16 +513,12 @@ func (st *Store) StoreSchemaV1() error {
 }
 
 func (st *Store) Close(ctx context.Context) error {
-	// if !st.open.Load() {
-	// 	return nil
-	// }
-
-	st.log.Info("closing log store ...")
+	st.log.Info("closing raft log store ...")
 	if err := st.logStore.Close(); err != nil {
 		return fmt.Errorf("close log store: %w", err)
 	}
 
-	st.log.Info("closing data store ...")
+	st.log.Info("closing database store ...")
 	if err := st.schemaManager.Close(ctx); err != nil {
 		return fmt.Errorf(" close database: %w", err)
 	}
