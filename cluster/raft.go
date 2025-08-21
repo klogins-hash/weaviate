@@ -96,12 +96,6 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
-	// Close transport early to stop incoming Raft traffic before memberlist operations
-	s.log.Info("closing raft transport to stop incoming traffic...")
-	if err := s.store.raftTransport.Close(); err != nil {
-		s.log.WithError(err).Warn("close raft transport")
-	}
-
 	s.log.Info("leaving memberlist ...")
 	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("leave memberlist")
@@ -110,6 +104,11 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 	s.log.Info("shutting down memberlist...")
 	if err := s.nodeSelector.Shutdown(); err != nil {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
+	}
+
+	s.log.Info("closing raft transport to stop incoming traffic...")
+	if err := s.store.raftTransport.Close(); err != nil {
+		s.log.WithError(err).Warn("close raft transport")
 	}
 
 	s.log.Info("stopping raft operations ...")
