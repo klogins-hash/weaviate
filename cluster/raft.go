@@ -107,6 +107,8 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.store.log.WithError(err).Warn("leave memberlist")
 	}
 
+	time.Sleep(500 * time.Millisecond) // TODO reconfigure,, but this sleep for leaving propagation
+
 	s.log.Info("shutting down memberlist...")
 	if err := s.nodeSelector.Shutdown(); err != nil {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
