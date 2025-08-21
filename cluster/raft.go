@@ -71,22 +71,6 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		if err := s.store.raft.LeadershipTransfer().Error(); err != nil {
 			s.store.log.WithError(err).Error("transferring leadership")
 		} else {
-			s.log.Info("waiting for leadership transfer to complete...")
-			timeout := time.After(10 * time.Second)
-		transferLoop:
-			for s.store.IsLeader() {
-				select {
-				case <-timeout:
-					s.log.Warn("timeout waiting for leadership transfer")
-					break transferLoop
-				case <-ctx.Done():
-					s.log.Warn("shutdown timeout during leadership transfer")
-					break transferLoop
-				default:
-					time.Sleep(100 * time.Millisecond)
-				}
-			}
-
 			// Verify that a new leader has been elected
 			s.log.Info("verifying new leader election...")
 			if err := s.waitForNewLeader(ctx); err != nil {
@@ -103,6 +87,19 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.log.WithError(err).Warn("remove from Raft configuration")
 	} else {
 		s.log.Info("successfully removed from Raft configuration")
+		// Ensure the configuration change is committed cluster-wide before leaving
+		s.log.Info("waiting for removal to be applied across the cluster...")
+		if err := s.waitRemovedFromConfig(ctx); err != nil {
+			s.log.WithError(err).Warn("timeout waiting for config removal; proceeding with shutdown")
+		} else {
+			s.log.Info("confirmed removal from Raft configuration")
+		}
+	}
+
+	// Close transport early to stop incoming Raft traffic before memberlist operations
+	s.log.Info("closing raft transport to stop incoming traffic...")
+	if err := s.store.raftTransport.Close(); err != nil {
+		s.log.WithError(err).Warn("close raft transport")
 	}
 
 	s.log.Info("leaving memberlist ...")
@@ -115,15 +112,9 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
 	}
 
-	// Close transport after gossip propagation to prevent Raft traffic
-	s.store.log.Info("closing raft-net after gossip propagation...")
-	if err := s.store.raftTransport.Close(); err != nil {
-		s.store.log.WithError(err).Warn("close raft-net")
-	}
-
 	s.log.Info("stopping raft operations ...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
-		s.store.log.WithError(err).Warn("shutdown raft")
+		s.log.WithError(err).Warn("shutdown raft")
 	}
 
 	return s.store.Close(ctx)
@@ -131,7 +122,7 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 
 // waitForNewLeader waits for a new leader to be elected after leadership transfer
 func (s *Raft) waitForNewLeader(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second) // TODO use election timeout
 	defer cancel()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -142,9 +133,40 @@ func (s *Raft) waitForNewLeader(ctx context.Context) error {
 		case <-ctx.Done():
 			return fmt.Errorf("timeout waiting for new leader: %w", ctx.Err())
 		case <-ticker.C:
-			newLeader := s.store.Leader()
-			if newLeader != "" && newLeader != s.store.ID() {
+			_, newLeader := s.store.LeaderWithID()
+			if newLeader != "" && newLeader != raft.ServerID(s.store.ID()) {
 				s.log.WithField("new_leader", newLeader).Info("new leader confirmed")
+				return nil
+			}
+		}
+	}
+}
+
+// waitRemovedFromConfig polls raft configuration until the given id is absent or the context times out
+func (s *Raft) waitRemovedFromConfig(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for removal of %s from configuration: %w", s.store.ID(), ctx.Err())
+		case <-ticker.C:
+			fut := s.store.raft.GetConfiguration()
+			if err := fut.Error(); err != nil {
+				continue
+			}
+			removed := true
+			for _, sv := range fut.Configuration().Servers {
+				if string(sv.ID) == s.store.ID() {
+					removed = false
+					break
+				}
+			}
+			if removed {
 				return nil
 			}
 		}
