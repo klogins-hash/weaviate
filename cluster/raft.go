@@ -106,14 +106,15 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
 	}
 
-	s.log.Info("closing raft transport to stop incoming traffic...")
-	if err := s.store.raftTransport.Close(); err != nil {
-		s.log.WithError(err).Warn("close raft transport")
-	}
-
 	s.log.Info("stopping raft operations ...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
 		s.log.WithError(err).Warn("shutdown raft")
+	}
+
+	// Close transport LAST after all memberlist operations complete
+	s.log.Info("closing raft transport...")
+	if err := s.store.raftTransport.Close(); err != nil {
+		s.log.WithError(err).Warn("close raft transport")
 	}
 
 	return s.store.Close(ctx)
