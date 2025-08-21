@@ -82,14 +82,16 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 	}
 
 	// Remove from Raft configuration after leadership transfer (for all nodes)
-	if s.store.IsLeader() {
-		s.log.Info("removing this node from Raft configuration...")
-		if err := s.store.raft.RemoveServer(raft.ServerID(s.store.ID()), 0, 0).Error(); err != nil {
-			s.log.WithError(err).Warn("remove from Raft configuration")
+	s.log.Info("requesting removal from leader via RemovePeer RPC...")
+	leader := s.store.Leader()
+	if leader != "" {
+		req := &cmd.RemovePeerRequest{Id: s.store.ID()}
+		_, err := s.cl.Remove(ctx, leader, req)
+		if err != nil {
+			s.log.WithError(err).Warn("failed to request removal from leader")
 		} else {
-			s.log.Info("successfully removed from Raft configuration")
-			// Ensure the configuration change is committed cluster-wide before leaving
-			s.log.Info("waiting for removal to be applied across the cluster...")
+			s.log.Info("successfully requested removal from leader")
+			// Wait for the removal to be applied
 			if err := s.waitRemovedFromConfig(ctx); err != nil {
 				s.log.WithError(err).Warn("timeout waiting for config removal; proceeding with shutdown")
 			} else {
@@ -97,25 +99,7 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 			}
 		}
 	} else {
-		s.log.Info("requesting removal from leader via RemovePeer RPC...")
-		leader := s.store.Leader()
-		if leader != "" {
-			req := &cmd.RemovePeerRequest{Id: s.store.ID()}
-			_, err := s.cl.Remove(ctx, leader, req)
-			if err != nil {
-				s.log.WithError(err).Warn("failed to request removal from leader")
-			} else {
-				s.log.Info("successfully requested removal from leader")
-				// Wait for the removal to be applied
-				if err := s.waitRemovedFromConfig(ctx); err != nil {
-					s.log.WithError(err).Warn("timeout waiting for config removal; proceeding with shutdown")
-				} else {
-					s.log.Info("confirmed removal from Raft configuration")
-				}
-			}
-		} else {
-			s.log.Warn("no leader available to request removal from")
-		}
+		s.log.Warn("no leader available to request removal from")
 	}
 
 	s.log.Info("leaving memberlist ...")
@@ -128,15 +112,14 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
 	}
 
-	s.log.Info("stopping raft operations ...")
-	if err := s.store.raft.Shutdown().Error(); err != nil {
-		s.log.WithError(err).Warn("shutdown raft")
-	}
-
-	// Close transport LAST after all memberlist operations complete
 	s.log.Info("closing raft transport...")
 	if err := s.store.raftTransport.Close(); err != nil {
 		s.log.WithError(err).Warn("close raft transport")
+	}
+
+	s.log.Info("stopping raft operations ...")
+	if err := s.store.raft.Shutdown().Error(); err != nil {
+		s.log.WithError(err).Warn("shutdown raft")
 	}
 
 	return s.store.Close(ctx)
