@@ -57,21 +57,31 @@ func (s *Raft) Open(ctx context.Context, db schema.Indexer) error {
 }
 
 // Close() is called when the node is shutting down.
+//
+// Shutdown Sequence:
+// 1. Mark node as not ready (Kubernetes readiness probe)
+// 2. Transfer leadership if current leader (prevents client requests)
+// 3. Remove from Raft configuration via RPC
+// 4. Shutdown memberlist (leaves cluster and shuts down)
+// 5. Shutdown Raft operations
+// 6. Close Raft transport (after Raft shutdown)
+// 7. Close underlying database store
+//
+// This sequence minimizes shutdown errors by ensuring proper dependency
+// ordering and allowing time for cluster state propagation.
 func (s *Raft) Close(ctx context.Context) (err error) {
 	s.log.Info("shutting down raft sub-system ...")
 
-	// Set store as closed immediately to signal not ready
+	// Step 1: Mark store as closed (Kubernetes readiness probe)
 	s.store.open.Store(false)
 	s.log.Info("marked store as closed - node no longer ready")
 
-	// transfer leadership: it stops accepting client requests, ensures
-	// the target server is up to date and initiates the transfer
+	// Step 2: Transfer leadership if current leader
 	if s.store.IsLeader() {
 		s.store.log.Info("transferring leadership to another server")
 		if err := s.store.raft.LeadershipTransfer().Error(); err != nil {
 			s.store.log.WithError(err).Error("transferring leadership")
 		} else {
-			// Verify that a new leader has been elected
 			s.log.Info("verifying new leader election...")
 			if err := s.waitForNewLeader(ctx); err != nil {
 				s.log.WithError(err).Warn("failed to verify new leader, proceeding anyway")
@@ -81,7 +91,7 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
-	// Remove from Raft configuration after leadership transfer (for all nodes)
+	// Step 3: Remove from Raft configuration
 	s.log.Info("requesting removal from leader via RemovePeer RPC...")
 	leader := s.store.Leader()
 	if leader != "" {
@@ -91,7 +101,6 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 			s.log.WithError(err).Warn("failed to request removal from leader")
 		} else {
 			s.log.Info("successfully requested removal from leader")
-			// Wait for the removal to be applied
 			if err := s.waitRemovedFromConfig(ctx); err != nil {
 				s.log.WithError(err).Warn("timeout waiting for config removal; proceeding with shutdown")
 			} else {
@@ -102,36 +111,33 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		s.log.Warn("no leader available to request removal from")
 	}
 
+	// Step 4: Shutdown memberlist (leaves cluster and shuts down)
 	s.log.Info("leaving memberlist ...")
-	if err := s.nodeSelector.Leave(30 * time.Second); err != nil {
-		s.store.log.WithError(err).Warn("leave memberlist")
-	}
-
-	time.Sleep(500 * time.Millisecond) // TODO reconfigure,, but this sleep for leaving propagation
-
-	s.log.Info("shutting down memberlist...")
-	if err := s.nodeSelector.Shutdown(); err != nil {
+	if err := s.nodeSelector.Shutdown(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
 	}
 
+	// Step 5: Shutdown Raft operations
 	s.log.Info("stopping raft operations ...")
 	if err := s.store.raft.Shutdown().Error(); err != nil {
 		s.log.WithError(err).Warn("shutdown raft")
 	}
 
-	// Close transport AFTER Raft shutdown to ensure all Raft operations complete
-	// This prevents "connection reset" errors during Raft shutdown
+	// Step 6: Close Raft transport (after Raft shutdown)
 	s.log.Info("closing raft transport...")
 	if err := s.store.raftTransport.Close(); err != nil {
 		s.log.WithError(err).Warn("close raft transport")
 	}
 
+	// Step 7: Close underlying store
 	return s.store.Close(ctx)
 }
 
-// waitForNewLeader waits for a new leader to be elected after leadership transfer
+// waitForNewLeader waits for a new leader to be elected after leadership transfer.
+// This ensures that leadership transfer has completed successfully before
+// proceeding with node removal from the cluster.
 func (s *Raft) waitForNewLeader(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second) // TODO use election timeout
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -151,7 +157,9 @@ func (s *Raft) waitForNewLeader(ctx context.Context) error {
 	}
 }
 
-// waitRemovedFromConfig polls raft configuration until the given id is absent or the context times out
+// waitRemovedFromConfig polls the Raft configuration until the given node ID is absent
+// or the context times out. This ensures that the node removal has been committed
+// cluster-wide before proceeding with memberlist shutdown.
 func (s *Raft) waitRemovedFromConfig(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

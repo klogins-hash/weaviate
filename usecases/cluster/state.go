@@ -45,10 +45,8 @@ type NodeSelector interface {
 	// NodeHostname return hosts address for a specific node name
 	NodeHostname(name string) (string, bool)
 	AllHostnames() []string
-	// Leave leaves the cluster gracefully
-	Leave(timeout time.Duration) error
 	// Shutdown leaves the cluster gracefully and shuts down the memberlist instance
-	Shutdown() error
+	Shutdown(timeout time.Duration) error
 }
 
 type State struct {
@@ -204,11 +202,15 @@ func (s *State) Hostnames() []string {
 	return out[:i]
 }
 
-func (s *State) Leave(timeout time.Duration) error {
-	return s.list.Leave(timeout)
-}
+func (s *State) Shutdown(timeout time.Duration) error {
+	s.delegate.log.Info("leaving memberlist ...")
+	if err := s.list.Leave(timeout); err != nil {
+		s.delegate.log.WithError(err).Warn("leave memberlist")
+	}
 
-func (s *State) Shutdown() error {
+	// Wait for gossip propagation to complete
+	time.Sleep(500 * time.Millisecond)
+
 	return s.list.Shutdown()
 }
 
