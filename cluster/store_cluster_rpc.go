@@ -16,6 +16,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/sirupsen/logrus"
+
 	"github.com/weaviate/weaviate/cluster/types"
 )
 
@@ -47,6 +48,18 @@ func (st *Store) Remove(id string) error {
 		return types.ErrNotLeader
 	}
 	return st.assertFuture(st.raft.RemoveServer(raft.ServerID(id), 0, 0))
+}
+
+// Demote converts a voter node to a non-voter node in the cluster.
+func (st *Store) Demote(id string) error {
+	if !st.open.Load() {
+		return types.ErrNotOpen
+	}
+	if st.raft.State() != raft.Leader {
+		return types.ErrNotLeader
+	}
+
+	return st.assertFuture(st.raft.DemoteVoter(raft.ServerID(id), 0, 0))
 }
 
 // Notify signals this Store that a node is ready for bootstrapping at the specified address.

@@ -7,6 +7,7 @@ service ClusterService {
   rpc RemovePeer(RemovePeerRequest) returns (RemovePeerResponse) {}
   rpc JoinPeer(JoinPeerRequest) returns (JoinPeerResponse) {}
   rpc NotifyPeer(NotifyPeerRequest) returns (NotifyPeerResponse) {}
+  rpc DemotePeer(DemotePeerRequest) returns (DemotePeerResponse) {}
   rpc Apply(ApplyRequest) returns (ApplyResponse) {}
   rpc Query(QueryRequest) returns (QueryResponse) {}
 }
@@ -25,6 +26,13 @@ message RemovePeerRequest {
   string id = 1;
 }
 message RemovePeerResponse {
+  string leader = 1;
+}
+
+message DemotePeerRequest {
+  string id = 1;
+}
+message DemotePeerResponse {
   string leader = 1;
 }
 

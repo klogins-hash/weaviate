@@ -18,9 +18,10 @@ import (
 
 	grpc_sentry "github.com/johnbellone/grpc-middleware-sentry"
 	"github.com/sirupsen/logrus"
-	cmd "github.com/weaviate/weaviate/cluster/proto/api"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	cmd "github.com/weaviate/weaviate/cluster/proto/api"
 )
 
 const serviceConfig = `
@@ -137,6 +138,18 @@ func (cl *Client) Remove(ctx context.Context, leaderRaftAddr string, req *cmd.Re
 	}
 
 	return cmd.NewClusterServiceClient(conn).RemovePeer(ctx, req)
+}
+
+// Demote will contact the node at leaderRaftAddr and demote the client node from voter to non-voter in the RAFT cluster
+// Returns the server response to the demote request
+// Returns an error if an RPC connection to leaderRaftAddr can't be established
+func (cl *Client) Demote(ctx context.Context, leaderRaftAddr string, req *cmd.DemotePeerRequest) (*cmd.DemotePeerResponse, error) {
+	conn, err := cl.getConn(ctx, leaderRaftAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	return cmd.NewClusterServiceClient(conn).DemotePeer(ctx, req)
 }
 
 // Apply will contact the node at leaderRaftAddr and send req to be applied in the RAFT store

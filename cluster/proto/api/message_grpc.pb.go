@@ -24,6 +24,7 @@ const (
 	ClusterService_RemovePeer_FullMethodName = "/weaviate.internal.cluster.ClusterService/RemovePeer"
 	ClusterService_JoinPeer_FullMethodName   = "/weaviate.internal.cluster.ClusterService/JoinPeer"
 	ClusterService_NotifyPeer_FullMethodName = "/weaviate.internal.cluster.ClusterService/NotifyPeer"
+	ClusterService_DemotePeer_FullMethodName = "/weaviate.internal.cluster.ClusterService/DemotePeer"
 	ClusterService_Apply_FullMethodName      = "/weaviate.internal.cluster.ClusterService/Apply"
 	ClusterService_Query_FullMethodName      = "/weaviate.internal.cluster.ClusterService/Query"
 )
@@ -35,6 +36,7 @@ type ClusterServiceClient interface {
 	RemovePeer(ctx context.Context, in *RemovePeerRequest, opts ...grpc.CallOption) (*RemovePeerResponse, error)
 	JoinPeer(ctx context.Context, in *JoinPeerRequest, opts ...grpc.CallOption) (*JoinPeerResponse, error)
 	NotifyPeer(ctx context.Context, in *NotifyPeerRequest, opts ...grpc.CallOption) (*NotifyPeerResponse, error)
+	DemotePeer(ctx context.Context, in *DemotePeerRequest, opts ...grpc.CallOption) (*DemotePeerResponse, error)
 	Apply(ctx context.Context, in *ApplyRequest, opts ...grpc.CallOption) (*ApplyResponse, error)
 	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResponse, error)
 }
@@ -77,6 +79,16 @@ func (c *clusterServiceClient) NotifyPeer(ctx context.Context, in *NotifyPeerReq
 	return out, nil
 }
 
+func (c *clusterServiceClient) DemotePeer(ctx context.Context, in *DemotePeerRequest, opts ...grpc.CallOption) (*DemotePeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DemotePeerResponse)
+	err := c.cc.Invoke(ctx, ClusterService_DemotePeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clusterServiceClient) Apply(ctx context.Context, in *ApplyRequest, opts ...grpc.CallOption) (*ApplyResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ApplyResponse)
@@ -104,6 +116,7 @@ type ClusterServiceServer interface {
 	RemovePeer(context.Context, *RemovePeerRequest) (*RemovePeerResponse, error)
 	JoinPeer(context.Context, *JoinPeerRequest) (*JoinPeerResponse, error)
 	NotifyPeer(context.Context, *NotifyPeerRequest) (*NotifyPeerResponse, error)
+	DemotePeer(context.Context, *DemotePeerRequest) (*DemotePeerResponse, error)
 	Apply(context.Context, *ApplyRequest) (*ApplyResponse, error)
 	Query(context.Context, *QueryRequest) (*QueryResponse, error)
 }
@@ -123,6 +136,9 @@ func (UnimplementedClusterServiceServer) JoinPeer(context.Context, *JoinPeerRequ
 }
 func (UnimplementedClusterServiceServer) NotifyPeer(context.Context, *NotifyPeerRequest) (*NotifyPeerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method NotifyPeer not implemented")
+}
+func (UnimplementedClusterServiceServer) DemotePeer(context.Context, *DemotePeerRequest) (*DemotePeerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DemotePeer not implemented")
 }
 func (UnimplementedClusterServiceServer) Apply(context.Context, *ApplyRequest) (*ApplyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Apply not implemented")
@@ -204,6 +220,24 @@ func _ClusterService_NotifyPeer_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClusterService_DemotePeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DemotePeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).DemotePeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_DemotePeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).DemotePeer(ctx, req.(*DemotePeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClusterService_Apply_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ApplyRequest)
 	if err := dec(in); err != nil {
@@ -258,6 +292,10 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "NotifyPeer",
 			Handler:    _ClusterService_NotifyPeer_Handler,
+		},
+		{
+			MethodName: "DemotePeer",
+			Handler:    _ClusterService_DemotePeer_Handler,
 		},
 		{
 			MethodName: "Apply",

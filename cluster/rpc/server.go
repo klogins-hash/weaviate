@@ -18,24 +18,25 @@ import (
 	"net"
 	"strings"
 
-	enterrors "github.com/weaviate/weaviate/entities/errors"
-	"github.com/weaviate/weaviate/usecases/monitoring"
-
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_sentry "github.com/johnbellone/grpc-middleware-sentry"
 	"github.com/sirupsen/logrus"
-	cmd "github.com/weaviate/weaviate/cluster/proto/api"
-	"github.com/weaviate/weaviate/cluster/schema"
-	"github.com/weaviate/weaviate/cluster/types"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	cmd "github.com/weaviate/weaviate/cluster/proto/api"
+	"github.com/weaviate/weaviate/cluster/schema"
+	"github.com/weaviate/weaviate/cluster/types"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+	"github.com/weaviate/weaviate/usecases/monitoring"
 )
 
 type raftPeers interface {
 	Join(id string, addr string, voter bool) error
 	Notify(id string, addr string) error
 	Remove(id string) error
+	Demote(id string) error
 	Leader() string
 }
 
@@ -98,6 +99,16 @@ func (s *Server) RemovePeer(_ context.Context, req *cmd.RemovePeerRequest) (*cmd
 		return &cmd.RemovePeerResponse{Leader: s.raftPeers.Leader()}, toRPCError(err)
 	}
 	return &cmd.RemovePeerResponse{}, nil
+}
+
+// DemotePeer will convert a voter node to a non-voter node in the RAFT cluster.
+// Returns an error and the current raft leader if demotion fails.
+func (s *Server) DemotePeer(_ context.Context, req *cmd.DemotePeerRequest) (*cmd.DemotePeerResponse, error) {
+	err := s.raftPeers.Demote(req.Id)
+	if err != nil {
+		return &cmd.DemotePeerResponse{Leader: s.raftPeers.Leader()}, toRPCError(err)
+	}
+	return &cmd.DemotePeerResponse{}, nil
 }
 
 // NotifyPeer will notify the RAFT cluster that a peer has notified that it is ready to be joined.
@@ -173,10 +184,10 @@ func (s *Server) Open() error {
 	return nil
 }
 
-// Close closes the server and free any used ressources.
+// Close closes the server and free any used resources.
 func (s *Server) Close() {
 	if s.grpcServer != nil {
-		s.grpcServer.Stop()
+		s.grpcServer.GracefulStop()
 	}
 }
 

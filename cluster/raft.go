@@ -41,6 +41,7 @@ type client interface {
 	Query(ctx context.Context, leaderAddr string, req *cmd.QueryRequest) (*cmd.QueryResponse, error)
 	Remove(ctx context.Context, leaderAddress string, req *cmd.RemovePeerRequest) (*cmd.RemovePeerResponse, error)
 	Join(ctx context.Context, leaderAddr string, req *cmd.JoinPeerRequest) (*cmd.JoinPeerResponse, error)
+	Demote(ctx context.Context, leaderAddr string, req *cmd.DemotePeerRequest) (*cmd.DemotePeerResponse, error)
 }
 
 func NewRaft(selector cluster.NodeSelector, store *Store, client client) *Raft {
@@ -61,14 +62,11 @@ func (s *Raft) Open(ctx context.Context, db schema.Indexer) error {
 // Shutdown Sequence:
 // 1. Mark node as not ready (Kubernetes readiness probe)
 // 2. Transfer leadership if current leader (prevents client requests)
-// 3. Remove from Raft configuration via RPC
+// 3. Convert to non-voter from Raft config (maintains cluster stability)
 // 4. Shutdown memberlist (leaves cluster and shuts down)
 // 5. Shutdown Raft operations
 // 6. Close Raft transport (after Raft shutdown)
 // 7. Close underlying database store
-//
-// This sequence minimizes shutdown errors by ensuring proper dependency
-// ordering and allowing time for cluster state propagation.
 func (s *Raft) Close(ctx context.Context) (err error) {
 	s.log.Info("shutting down raft sub-system ...")
 
@@ -91,24 +89,26 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 		}
 	}
 
-	// Step 3: Remove from Raft configuration
-	s.log.Info("requesting removal from leader via RemovePeer RPC...")
+	// Step 3: Convert to non-voter from Raft config
+	// This maintains cluster size for replication factor calculations while
+	// preventing the node from participating in consensus during shutdown
+	s.log.Info("requesting conversion to non-voter from leader via RPC...")
 	leader := s.store.Leader()
 	if leader != "" {
-		req := &cmd.RemovePeerRequest{Id: s.store.ID()}
-		_, err := s.cl.Remove(ctx, leader, req)
+		demoteReq := &cmd.DemotePeerRequest{Id: s.store.ID()}
+		_, err := s.cl.Demote(ctx, leader, demoteReq)
 		if err != nil {
-			s.log.WithError(err).Warn("failed to request removal from leader")
+			s.log.WithError(err).Warn("failed to request conversion to non-voter from leader")
 		} else {
-			s.log.Info("successfully requested removal from leader")
-			if err := s.waitRemovedFromConfig(ctx); err != nil {
-				s.log.WithError(err).Warn("timeout waiting for config removal; proceeding with shutdown")
+			s.log.Info("successfully requested conversion to non-voter from leader")
+			if err := s.waitConvertedToNonVoter(ctx); err != nil {
+				s.log.WithError(err).Warn("timeout waiting for non-voter conversion; proceeding with shutdown")
 			} else {
-				s.log.Info("confirmed removal from Raft configuration")
+				s.log.Info("confirmed conversion to non-voter")
 			}
 		}
 	} else {
-		s.log.Warn("no leader available to request removal from")
+		s.log.Warn("no leader available to request conversion to non-voter")
 	}
 
 	// Step 4: Shutdown memberlist (leaves cluster and shuts down)
@@ -116,6 +116,9 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 	if err := s.nodeSelector.Shutdown(30 * time.Second); err != nil {
 		s.store.log.WithError(err).Warn("shutdown memberlist")
 	}
+
+	s.log.Info("waiting for leader to detect node departure...")
+	time.Sleep(3 * time.Second)
 
 	// Step 5: Shutdown Raft operations
 	s.log.Info("stopping raft operations ...")
@@ -135,7 +138,7 @@ func (s *Raft) Close(ctx context.Context) (err error) {
 
 // waitForNewLeader waits for a new leader to be elected after leadership transfer.
 // This ensures that leadership transfer has completed successfully before
-// proceeding with node removal from the cluster.
+// proceeding with node conversion to non-voter.
 func (s *Raft) waitForNewLeader(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -157,11 +160,11 @@ func (s *Raft) waitForNewLeader(ctx context.Context) error {
 	}
 }
 
-// waitRemovedFromConfig polls the Raft configuration until the given node ID is absent
-// or the context times out. This ensures that the node removal has been committed
+// waitConvertedToNonVoter polls the Raft configuration until the given node ID is converted to non-voter
+// or the context times out. This ensures that the node conversion has been committed
 // cluster-wide before proceeding with memberlist shutdown.
-func (s *Raft) waitRemovedFromConfig(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+func (s *Raft) waitConvertedToNonVoter(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -170,21 +173,30 @@ func (s *Raft) waitRemovedFromConfig(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for removal of %s from configuration: %w", s.store.ID(), ctx.Err())
+			return fmt.Errorf("waiting for conversion of %s to non-voter: %w", s.store.ID(), ctx.Err())
 		case <-ticker.C:
 			fut := s.store.raft.GetConfiguration()
 			if err := fut.Error(); err != nil {
+				s.log.WithError(err).Warn("failed to get Raft configuration")
 				continue
 			}
-			removed := true
 			for _, sv := range fut.Configuration().Servers {
 				if string(sv.ID) == s.store.ID() {
-					removed = false
+					s.log.WithFields(logrus.Fields{
+						"server_id": string(sv.ID),
+						"suffrage":  sv.Suffrage,
+						"address":   string(sv.Address),
+					}).Debug("found self in configuration")
+
+					// If we're still in the config but as a non-voter, that's what we want
+					if sv.Suffrage == raft.Nonvoter {
+						s.log.Info("confirmed conversion to non-voter")
+						return nil
+					}
+					// Still a voter, keep waiting
+					s.log.Debug("still a voter, waiting for demotion...")
 					break
 				}
-			}
-			if removed {
-				return nil
 			}
 		}
 	}
