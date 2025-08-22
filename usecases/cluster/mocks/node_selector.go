@@ -69,6 +69,10 @@ func (m memberlist) NodeGRPCPort(name string) (int, error) {
 	return 0, nil
 }
 
+func (m memberlist) Leave() error {
+	return nil
+}
+
 func (m memberlist) Shutdown(timeout time.Duration) error {
 	return nil
 }

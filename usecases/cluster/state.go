@@ -45,6 +45,8 @@ type NodeSelector interface {
 	// NodeHostname return hosts address for a specific node name
 	NodeHostname(name string) (string, bool)
 	AllHostnames() []string
+	// Leave marks the node as leaving the cluster (still visible but shutting down)
+	Leave() error
 	// Shutdown leaves the cluster gracefully and shuts down the memberlist instance
 	Shutdown(timeout time.Duration) error
 }
@@ -202,14 +204,43 @@ func (s *State) Hostnames() []string {
 	return out[:i]
 }
 
-func (s *State) Shutdown(timeout time.Duration) error {
-	s.delegate.log.Info("leaving memberlist ...")
-	if err := s.list.Leave(timeout); err != nil {
-		s.delegate.log.WithError(err).Warn("leave memberlist")
+// Leave marks the node as leaving the cluster (still visible but shutting down)
+// This prevents replication factor errors while allowing clean shutdown
+func (s *State) Leave() error {
+	s.listLock.Lock()
+	defer s.listLock.Unlock()
+
+	if s.list == nil {
+		return fmt.Errorf("memberlist not initialized")
 	}
 
-	// Wait for gossip propagation to complete
-	time.Sleep(500 * time.Millisecond)
+	s.delegate.log.Info("marking node as gracefully leaving...")
+
+	// Set graceful leave state in metadata (this gets broadcasted to all nodes)
+	s.delegate.SetGracefulLeave()
+
+	// Force metadata update to propagate graceful leave state immediately
+	if err := s.list.UpdateNode(0); err != nil {
+		s.delegate.log.WithError(err).Warn("failed to update node metadata")
+	} else {
+		s.delegate.log.Info("successfully updated metadata with graceful leave state")
+	}
+
+	if err := s.list.Leave(5 * time.Second); err != nil {
+		return fmt.Errorf("failed to leave memberlist: %w", err)
+	}
+
+	s.delegate.log.Info("successfully marked as leaving in memberlist")
+	return nil
+}
+
+func (s *State) Shutdown(timeout time.Duration) error {
+	s.listLock.Lock()
+	defer s.listLock.Unlock()
+
+	if s.list == nil {
+		return fmt.Errorf("memberlist not initialized")
+	}
 
 	return s.list.Shutdown()
 }
@@ -279,11 +310,34 @@ func (s *State) AllNames() []string {
 	s.listLock.RLock()
 	defer s.listLock.RUnlock()
 
+	if s.list == nil {
+		return []string{}
+	}
+
 	mem := s.list.Members()
 	out := make([]string, len(mem))
 
 	for i, m := range mem {
 		out[i] = m.Name
+	}
+
+	// Check the delegate cache for gracefully leaving nodes
+	// These nodes left memberlist but are still in cache due to graceful leave
+	cacheNodes := s.delegate.getAllCachedGraceful()
+	for _, nodeName := range cacheNodes {
+		found := false
+		for i := 0; i < len(out); i++ {
+			if out[i] == nodeName {
+				found = true
+				break
+			}
+		}
+
+		// If not in output, it's likely gracefully leaving
+		if !found {
+			s.delegate.log.WithField("node", nodeName).Debug("including cached node in all names (gracefully leaving)")
+			out = append(out, nodeName)
+		}
 	}
 
 	return out
@@ -306,6 +360,31 @@ func (s *State) storageNodes() []string {
 		if _, ok := s.nonStorageNodes[name]; !ok {
 			out[n] = m.Name
 			n++
+		}
+	}
+
+	// Check the delegate cache for gracefully leaving nodes
+	// These nodes left memberlist but are still in cache due to graceful leave
+	cacheNodes := s.delegate.getAllCachedGraceful()
+	for _, nodeName := range cacheNodes {
+		// Only add if not already in output and not a non-storage node
+		if _, ok := s.nonStorageNodes[nodeName]; !ok {
+			// Check if this node is already in the output
+			found := false
+			n := len(out)
+			for i := 0; i < n; i++ {
+				if out[i] == nodeName {
+					found = true
+					break
+				}
+			}
+
+			// If not in output, it's likely gracefully leaving
+			if !found {
+				s.delegate.log.WithField("node", nodeName).Debug("including cached node in storage nodes (gracefully leaving)")
+				out[n] = nodeName
+				n++
+			}
 		}
 	}
 
