@@ -1,0 +1,71 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main, production]
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.23'
+      
+      - name: Run tests
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+      
+      - name: Build Docker image
+        run: |
+          docker build -f Dockerfile.railway -t weaviate-railway:test .
+      
+      - name: Test Docker image
+        run: |
+          docker run -d -p 8080:8080 --name weaviate-test weaviate-railway:test
+          sleep 10
+          curl -f http://localhost:8080/v1/.well-known/ready || exit 1
+          docker stop weaviate-test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/production'
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install Railway CLI
+        run: |
+          curl -fsSL https://railway.app/install.sh | sh
+      
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --service weaviate
+      
+      - name: Health Check
+        run: |
+          sleep 30
+          DEPLOY_URL=$(railway status --json | jq -r '.url')
+          curl -f https://$DEPLOY_URL/v1/.well-known/ready || exit 1
+      
+      - name: Notify Deployment
+        if: success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Successfully deployed to Railway!'
+            })

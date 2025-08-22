@@ -1,0 +1,70 @@
+# Railway-optimized Dockerfile for Weaviate
+# Multi-stage build for smaller image size
+
+###############################################################################
+# Base build image
+FROM golang:1.23-alpine AS build_base
+RUN apk add --no-cache bash ca-certificates git gcc g++ libc-dev
+WORKDIR /go/src/github.com/weaviate/weaviate
+ENV GO111MODULE=on
+# Populate the module cache based on the go.{mod,sum} files.
+COPY go.mod .
+COPY go.sum .
+RUN go mod download
+
+###############################################################################
+# This image builds the weaviate server
+FROM build_base AS server_builder
+ARG TARGETARCH=amd64
+ARG GIT_BRANCH="main"
+ARG GIT_REVISION="railway"
+ARG BUILD_USER="railway"
+ARG BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+ARG CGO_ENABLED=1
+ENV CGO_ENABLED=$CGO_ENABLED
+COPY . .
+RUN GOOS=linux GOARCH=$TARGETARCH go build \
+      -ldflags '-w -extldflags "-static" \
+      -X github.com/weaviate/weaviate/usecases/build.Branch='"$GIT_BRANCH"' \
+      -X github.com/weaviate/weaviate/usecases/build.Revision='"$GIT_REVISION"' \
+      -X github.com/weaviate/weaviate/usecases/build.BuildUser='"$BUILD_USER"' \
+      -X github.com/weaviate/weaviate/usecases/build.BuildDate='"$BUILD_DATE"'' \
+      -o /weaviate-server ./cmd/weaviate-server
+
+###############################################################################
+# Final production image - optimized for Railway
+FROM alpine:3.19 AS weaviate
+
+# Install runtime dependencies
+RUN apk add --no-cache --upgrade \
+    ca-certificates \
+    openssl \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user for security
+RUN addgroup -g 1000 -S weaviate && \
+    adduser -u 1000 -S weaviate -G weaviate
+
+# Copy binary and required files
+COPY --from=server_builder --chown=weaviate:weaviate /weaviate-server /bin/weaviate
+
+# Create necessary directories
+RUN mkdir -p /var/lib/weaviate /modules /go/pkg/mod/github.com/go-ego && \
+    chown -R weaviate:weaviate /var/lib/weaviate /modules
+
+# Copy go-ego module (required for Chinese tokenization)
+COPY --from=server_builder /go/pkg/mod/github.com/go-ego /go/pkg/mod/github.com/go-ego
+
+# Switch to non-root user
+USER weaviate
+
+# Set working directory
+WORKDIR /var/lib/weaviate
+
+# Health check for Railway
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-8080}/v1/.well-known/ready || exit 1
+
+# Use Railway's PORT environment variable
+ENTRYPOINT ["/bin/weaviate"]
+CMD ["--host", "0.0.0.0", "--port", "${PORT:-8080}", "--scheme", "http"]
