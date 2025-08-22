@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile.railway"
   },
   "deploy": {
-    "startCommand": "/bin/weaviate --host 0.0.0.0 --port $PORT --scheme http",
+    "startCommand": "/bin/sh -c '/bin/weaviate --host 0.0.0.0 --port ${PORT:-8080} --scheme http'",
     "healthcheckPath": "/v1/.well-known/ready",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
