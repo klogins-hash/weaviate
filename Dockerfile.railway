@@ -59,8 +59,8 @@ WORKDIR /var/lib/weaviate
 
 # Health check for Railway
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-8080}/v1/.well-known/ready || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1
 
-# Use Railway's PORT environment variable
-ENTRYPOINT ["/bin/weaviate"]
-CMD ["--host", "0.0.0.0", "--port", "${PORT:-8080}", "--scheme", "http"]
+# Use shell form to allow environment variable expansion
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["/bin/weaviate --host 0.0.0.0 --port ${PORT:-8080} --scheme http"]
