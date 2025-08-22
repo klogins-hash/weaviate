@@ -16,19 +16,15 @@ RUN go mod download
 # This image builds the weaviate server
 FROM build_base AS server_builder
 ARG TARGETARCH=amd64
-ARG GIT_BRANCH="main"
-ARG GIT_REVISION="railway"
-ARG BUILD_USER="railway"
-ARG BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+ARG GIT_BRANCH=main
+ARG GIT_REVISION=railway
+ARG BUILD_USER=railway
+ARG BUILD_DATE=unknown
 ARG CGO_ENABLED=1
 ENV CGO_ENABLED=$CGO_ENABLED
 COPY . .
 RUN GOOS=linux GOARCH=$TARGETARCH go build \
-      -ldflags '-w -extldflags "-static" \
-      -X github.com/weaviate/weaviate/usecases/build.Branch='"$GIT_BRANCH"' \
-      -X github.com/weaviate/weaviate/usecases/build.Revision='"$GIT_REVISION"' \
-      -X github.com/weaviate/weaviate/usecases/build.BuildUser='"$BUILD_USER"' \
-      -X github.com/weaviate/weaviate/usecases/build.BuildDate='"$BUILD_DATE"'' \
+      -ldflags "-w -extldflags '-static'" \
       -o /weaviate-server ./cmd/weaviate-server
 
 ###############################################################################
